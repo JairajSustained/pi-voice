@@ -1,3 +1,4 @@
+# Modified from Hugging Face speech-to-speech; see NOTICE.
 from __future__ import annotations
 
 from threading import Event, Lock
