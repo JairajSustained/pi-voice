@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16_000
 SAMPLE_WIDTH_BYTES = 2
 DEFAULT_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
+DEFAULT_MODEL_REVISION = "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
 
 
 class Recorder(Protocol):
@@ -198,8 +199,13 @@ class AudioRecorder:
 class ParakeetTranscriber:
     """Lazy MLX adapter for NVIDIA Parakeet TDT on Apple Silicon."""
 
-    def __init__(self, model_name: str = DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        model_name: str = DEFAULT_MODEL,
+        model_revision: str = DEFAULT_MODEL_REVISION,
+    ) -> None:
         self._model_name = model_name
+        self._model_revision = model_revision
         self._model: Any | None = None
 
     def transcribe(self, audio: np.ndarray) -> TranscriptionResult:
@@ -222,7 +228,7 @@ class ParakeetTranscriber:
             from mlx_audio.stt.generate import load_model
 
             logger.info("Loading local Parakeet model: %s", self._model_name)
-            self._model = load_model(self._model_name)
+            self._model = load_model(self._model_name, revision=self._model_revision)
         return self._model
 
 

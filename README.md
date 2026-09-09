@@ -71,7 +71,7 @@ Recordings are capped at 60 seconds. Empty and very short captures are rejected.
 
 - No network listener is opened.
 - Audio and transcripts are not written to disk by Pi Voice.
-- Audio is processed locally with the Parakeet model. The model is downloaded from Hugging Face on first use unless already cached.
+- Audio is processed locally with a pinned revision of the Parakeet model. The model is downloaded from Hugging Face on first use unless already cached.
 - Transcripts are never submitted automatically.
 - Existing Pi permission gates remain authoritative.
 - Pi output, tool output, code, URLs, and secrets are never sent to speech synthesis; this project contains no TTS path.
@@ -126,7 +126,7 @@ The first transcription downloads, loads, and initializes the model. Later trans
 ## Development
 
 ```bash
-git clone git@github.com-personal:JairajSustained/pi-voice.git
+git clone https://github.com/JairajSustained/pi-voice.git
 cd pi-voice
 uv sync --python 3.11
 uv run pytest

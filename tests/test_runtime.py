@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import sys
 from threading import Event
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
-from pi_voice.runtime import AudioRecorder, LocalSpeechRuntime
+from pi_voice.runtime import DEFAULT_MODEL_REVISION, AudioRecorder, LocalSpeechRuntime, ParakeetTranscriber
 from pi_voice.service import TranscriptionResult
 
 
@@ -111,6 +112,24 @@ def test_audio_recorder_rejects_empty_recordings() -> None:
 
     with pytest.raises(RuntimeError, match="too short"):
         recorder.stop()
+
+
+def test_parakeet_transcriber_pins_the_model_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    expected_model = object()
+    generate = ModuleType("mlx_audio.stt.generate")
+
+    def load_model(model_name: str, **kwargs: object) -> object:
+        captured.update(model_name=model_name, **kwargs)
+        return expected_model
+
+    generate.load_model = load_model  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mlx_audio.stt.generate", generate)
+
+    transcriber = ParakeetTranscriber()
+
+    assert transcriber._get_model() is expected_model
+    assert captured["revision"] == DEFAULT_MODEL_REVISION
 
 
 def test_local_runtime_reuses_the_transcriber() -> None:

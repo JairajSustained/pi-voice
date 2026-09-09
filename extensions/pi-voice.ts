@@ -29,6 +29,7 @@ const MAX_PROTOCOL_LINE_BYTES = 64 * 1024;
 const MAX_ERROR_CHARS = 512;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const LONG_OPERATION_TIMEOUT_MS = 10 * 60_000;
+const STARTUP_TIMEOUT_MS = 10 * 60_000;
 const SPACE_HOLD_THRESHOLD_MS = 250;
 const RECORDING_CURSOR_STYLE = "\u001b[48;2;255;95;87m\u001b[38;2;20;20;20m";
 const TRANSCRIBING_CURSOR_STYLE = "\u001b[48;2;255;189;46m\u001b[38;2;20;20;20m";
@@ -55,14 +56,15 @@ class SidecarClient {
 	constructor(private readonly onStateChange: (state: VoiceState) => void) {}
 
 	async request(method: VoiceMethod, params: JsonObject = {}): Promise<JsonObject> {
-		this.ensureStarted();
+		const started = this.ensureStarted();
 		const child = this.child;
 		if (!child || child.stdin.destroyed) {
 			throw new SidecarError("SIDECAR_UNAVAILABLE", "Pi voice sidecar is unavailable");
 		}
 
 		const id = String(this.nextRequestId++);
-		const timeoutMs = method === "record.stop" ? LONG_OPERATION_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+		let timeoutMs = started ? STARTUP_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+		if (method === "record.stop") timeoutMs = LONG_OPERATION_TIMEOUT_MS;
 		return await new Promise<JsonObject>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				const error = new SidecarError("TIMEOUT", `Voice operation ${method} timed out; restart required`);
@@ -92,8 +94,8 @@ class SidecarClient {
 		this.disposeProcess();
 	}
 
-	private ensureStarted(): void {
-		if (this.child && !this.child.killed) return;
+	private ensureStarted(): boolean {
+		if (this.child && !this.child.killed) return false;
 		const launch = resolveSidecarLaunch();
 		const child = spawn(launch.command, launch.args, {
 			cwd: PACKAGE_ROOT,
@@ -115,6 +117,7 @@ class SidecarClient {
 			const reason = `Pi voice sidecar exited (${signal ?? code ?? "unknown"}). Run it directly for diagnostics.`;
 			this.failProcess(new SidecarError("SIDECAR_EXITED", reason));
 		});
+		return true;
 	}
 
 	private handleOutputChunk(chunk: Buffer): void {
@@ -220,7 +223,7 @@ export function resolveSidecarLaunch(): { command: string; args: string[] } {
 
 	return {
 		command: process.env.PI_VOICE_UV?.trim() || "uv",
-		args: ["run", "--project", PACKAGE_ROOT, "python", "-m", "pi_voice.sidecar"],
+		args: ["run", "--locked", "--no-dev", "--project", PACKAGE_ROOT, "python", "-m", "pi_voice.sidecar"],
 	};
 }
 
