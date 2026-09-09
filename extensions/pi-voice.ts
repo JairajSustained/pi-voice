@@ -1,7 +1,6 @@
 // Modified from Hugging Face speech-to-speech; see NOTICE.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, isKittyProtocolActive, Key, matchesKey, type TUI } from "@earendil-works/pi-tui";
@@ -46,16 +45,20 @@ class SidecarError extends Error {
 	}
 }
 
-class SidecarClient {
+export class SidecarClient {
 	state: VoiceState = "stopped";
 	private child: ChildProcessWithoutNullStreams | undefined;
 	private outputBuffer = Buffer.alloc(0);
 	private pending = new Map<string, PendingRequest>();
 	private nextRequestId = 1;
+	private closing = false;
 
 	constructor(private readonly onStateChange: (state: VoiceState) => void) {}
 
 	async request(method: VoiceMethod, params: JsonObject = {}): Promise<JsonObject> {
+		if (this.closing && method !== "shutdown") {
+			throw new SidecarError("SIDECAR_CLOSING", "Pi voice sidecar is shutting down");
+		}
 		const started = this.ensureStarted();
 		const child = this.child;
 		if (!child || child.stdin.destroyed) {
@@ -63,35 +66,41 @@ class SidecarClient {
 		}
 
 		const id = String(this.nextRequestId++);
-		let timeoutMs = started ? STARTUP_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
-		if (method === "record.stop") timeoutMs = LONG_OPERATION_TIMEOUT_MS;
+		const timeoutMs = requestTimeoutMs(method, started);
 		return await new Promise<JsonObject>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				const error = new SidecarError("TIMEOUT", `Voice operation ${method} timed out; restart required`);
 				const timedOut = this.takePending(id);
 				timedOut?.reject(error);
-				this.failProcess(error);
+				this.failProcess(error, child);
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 			child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
-				if (!error) return;
+				if (!error || this.child !== child) return;
 				const writeError = new SidecarError("SIDECAR_WRITE_FAILED", error.message);
 				const pending = this.takePending(id);
 				pending?.reject(writeError);
-				this.failProcess(writeError);
+				this.failProcess(writeError, child);
 			});
 		});
 	}
 
 	async shutdown(): Promise<void> {
 		const child = this.child;
-		if (!child) return;
+		if (!child || this.closing) return;
+		this.closing = true;
 		try {
 			await this.request("shutdown");
 		} catch {
 			child.kill("SIGTERM");
+		} finally {
+			if (this.child === child) {
+				this.rejectPending(new SidecarError("SIDECAR_CLOSING", "Pi voice sidecar shut down"));
+				child.kill("SIGTERM");
+				this.disposeProcess(child);
+			}
+			this.closing = false;
 		}
-		this.disposeProcess();
 	}
 
 	private ensureStarted(): boolean {
@@ -99,35 +108,34 @@ class SidecarClient {
 		const launch = resolveSidecarLaunch();
 		const child = spawn(launch.command, launch.args, {
 			cwd: PACKAGE_ROOT,
-			env: {
-				...process.env,
-				PYTHONPATH: [PYTHON_SOURCE, process.env.PYTHONPATH].filter(Boolean).join(delimiter),
-				PYTHONUNBUFFERED: "1",
-			},
+			env: buildSidecarEnvironment(),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.child = child;
 		this.state = "idle";
 		this.onStateChange("idle");
-		child.stdout.on("data", (chunk: Buffer) => this.handleOutputChunk(chunk));
+		child.stdout.on("data", (chunk: Buffer) => this.handleOutputChunk(child, chunk));
 		child.stderr.resume();
-		child.once("error", (error) => this.failProcess(new SidecarError("SIDECAR_START_FAILED", error.message)));
+		child.once("error", (error) =>
+			this.failProcess(new SidecarError("SIDECAR_START_FAILED", error.message), child),
+		);
 		child.once("exit", (code, signal) => {
 			if (this.child !== child) return;
 			const reason = `Pi voice sidecar exited (${signal ?? code ?? "unknown"}). Run it directly for diagnostics.`;
-			this.failProcess(new SidecarError("SIDECAR_EXITED", reason));
+			this.failProcess(new SidecarError("SIDECAR_EXITED", reason), child);
 		});
 		return true;
 	}
 
-	private handleOutputChunk(chunk: Buffer): void {
+	private handleOutputChunk(child: ChildProcessWithoutNullStreams, chunk: Buffer): void {
+		if (this.child !== child) return;
 		let offset = 0;
 		while (offset < chunk.length) {
 			const newline = chunk.indexOf(0x0a, offset);
 			const end = newline === -1 ? chunk.length : newline;
 			const fragment = chunk.subarray(offset, end);
 			if (this.outputBuffer.length + fragment.length > MAX_PROTOCOL_LINE_BYTES) {
-				this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an oversized protocol line"));
+				this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an oversized protocol line"), child);
 				return;
 			}
 			this.outputBuffer = Buffer.concat([this.outputBuffer, fragment]);
@@ -136,26 +144,27 @@ class SidecarClient {
 			const line = this.outputBuffer.toString("utf8").replace(/\r$/, "");
 			this.outputBuffer = Buffer.alloc(0);
 			offset = newline + 1;
-			if (line) this.handleLine(line);
+			if (line) this.handleLine(child, line);
 			if (!this.child) return;
 		}
 	}
 
-	private handleLine(line: string): void {
+	private handleLine(child: ChildProcessWithoutNullStreams, line: string): void {
+		if (this.child !== child) return;
 		let message: JsonObject;
 		try {
 			const parsed: unknown = JSON.parse(line);
 			if (!isJsonObject(parsed)) throw new Error("not an object");
 			message = parsed;
 		} catch {
-			this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned malformed JSON"));
+			this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned malformed JSON"), child);
 			return;
 		}
 
 		if (message.event !== undefined) {
 			const data = message.data;
 			if (message.event !== "status" || !isJsonObject(data) || !isVoiceState(data.state)) {
-				this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an invalid notification"));
+				this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an invalid notification"), child);
 				return;
 			}
 			this.state = data.state;
@@ -165,12 +174,15 @@ class SidecarClient {
 
 		const id = message.id;
 		if (typeof id !== "string") {
-			this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an uncorrelated response"));
+			this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an uncorrelated response"), child);
 			return;
 		}
 		const pending = this.takePending(id);
 		if (!pending) {
-			this.failProcess(new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned a response for an unknown request"));
+			this.failProcess(
+				new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned a response for an unknown request"),
+				child,
+			);
 			return;
 		}
 		if (message.ok === true && isJsonObject(message.result)) {
@@ -185,7 +197,7 @@ class SidecarClient {
 		}
 		const error = new SidecarError("INVALID_SIDECAR_OUTPUT", "Sidecar returned an invalid response");
 		pending.reject(error);
-		this.failProcess(error);
+		this.failProcess(error, child);
 	}
 
 	private takePending(id: string): PendingRequest | undefined {
@@ -196,35 +208,62 @@ class SidecarClient {
 		return pending;
 	}
 
-	private failProcess(error: SidecarError): void {
+	private failProcess(error: SidecarError, child: ChildProcessWithoutNullStreams): void {
+		if (this.child !== child) return;
+		this.rejectPending(error);
+		child.kill("SIGTERM");
+		this.disposeProcess(child);
+		this.state = "stopped";
+		this.onStateChange("stopped");
+	}
+
+	private rejectPending(error: SidecarError): void {
 		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timer);
 			pending.reject(error);
 		}
 		this.pending.clear();
-		this.child?.kill("SIGTERM");
-		this.disposeProcess();
-		this.state = "stopped";
-		this.onStateChange("stopped");
 	}
 
-	private disposeProcess(): void {
+	private disposeProcess(child: ChildProcessWithoutNullStreams): void {
+		if (this.child !== child) return;
 		this.outputBuffer = Buffer.alloc(0);
+		child.stdout.removeAllListeners();
+		child.stderr.removeAllListeners();
+		child.stdin.removeAllListeners();
+		child.removeAllListeners();
 		this.child = undefined;
 	}
+}
+
+export function requestTimeoutMs(method: VoiceMethod, started: boolean): number {
+	if (method === "record.stop") return LONG_OPERATION_TIMEOUT_MS;
+	return started ? STARTUP_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
 }
 
 export function resolveSidecarLaunch(): { command: string; args: string[] } {
 	const configuredPython = process.env.PI_VOICE_PYTHON?.trim();
 	if (configuredPython) return { command: configuredPython, args: ["-m", "pi_voice.sidecar"] };
 
-	const virtualenvPython = join(PACKAGE_ROOT, ".venv", "bin", "python");
-	if (existsSync(virtualenvPython)) return { command: virtualenvPython, args: ["-m", "pi_voice.sidecar"] };
-
 	return {
 		command: process.env.PI_VOICE_UV?.trim() || "uv",
 		args: ["run", "--locked", "--no-dev", "--project", PACKAGE_ROOT, "python", "-m", "pi_voice.sidecar"],
 	};
+}
+
+export function buildSidecarEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const environment = { ...source };
+	delete environment.PYTHONHOME;
+	delete environment.PYTHONINSPECT;
+	delete environment.PYTHONSTARTUP;
+	environment.DO_NOT_TRACK = "1";
+	environment.HF_HUB_DISABLE_IMPLICIT_TOKEN = "1";
+	environment.HF_HUB_DISABLE_TELEMETRY = "1";
+	environment.PYTHONNOUSERSITE = "1";
+	environment.PYTHONPATH = PYTHON_SOURCE;
+	environment.PYTHONSAFEPATH = "1";
+	environment.PYTHONUNBUFFERED = "1";
+	return environment;
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -261,6 +300,8 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 	let activeContext: ExtensionContext | undefined;
 	let activeTui: TUI | undefined;
 	let voiceState: VoiceState = "stopped";
+	let startInFlight = false;
+	let voiceGeneration = 0;
 
 	function updateStatus(): void {
 		if (!activeContext?.hasUI) return;
@@ -304,20 +345,32 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 	}
 
 	async function startRecording(ctx: ExtensionContext): Promise<void> {
-		if (!enabled) await enableVoice(ctx);
-		if (!enabled) return;
-		if (!ctx.isIdle()) {
-			ctx.ui.notify("Wait for Pi to finish before recording another request.", "warning");
+		if (startInFlight) {
+			ctx.ui.notify("Pi voice is already starting.", "warning");
 			return;
 		}
-		recordingEditorText = ctx.ui.getEditorText();
+		startInFlight = true;
+		const generation = voiceGeneration;
 		try {
-			await getClient(ctx).request("record.start");
-			updateStatus();
-			ctx.ui.notify("Recording… release Space to stop, or use F8 as the toggle fallback.", "info");
-		} catch (error) {
-			recordingEditorText = undefined;
-			notifyError(ctx, error);
+			if (!enabled) await enableVoice(ctx);
+			if (!enabled || generation !== voiceGeneration) return;
+			if (!ctx.isIdle()) {
+				ctx.ui.notify("Wait for Pi to finish before recording another request.", "warning");
+				return;
+			}
+			const editorSnapshot = ctx.ui.getEditorText();
+			recordingEditorText = editorSnapshot;
+			try {
+				await getClient(ctx).request("record.start");
+				if (!enabled || generation !== voiceGeneration) return;
+				updateStatus();
+				ctx.ui.notify("Recording… release Space to stop, or use F8 as the toggle fallback.", "info");
+			} catch (error) {
+				if (recordingEditorText === editorSnapshot) recordingEditorText = undefined;
+				if (generation === voiceGeneration) notifyError(ctx, error);
+			}
+		} finally {
+			startInFlight = false;
 		}
 	}
 
@@ -342,6 +395,7 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 
 	async function cancelVoice(ctx: ExtensionContext): Promise<void> {
 		clearSpaceHold();
+		voiceGeneration++;
 		try {
 			if (client) await client.request("cancel");
 		} catch (error) {
@@ -354,6 +408,7 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 
 	async function disableVoice(ctx: ExtensionContext): Promise<void> {
 		clearSpaceHold();
+		voiceGeneration++;
 		enabled = false;
 		recordingEditorText = undefined;
 		await client?.shutdown();
@@ -369,7 +424,7 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 	}
 
 	function handleTerminalInput(data: string, ctx: ExtensionContext): { consume?: boolean } | undefined {
-		if (!isKittyProtocolActive() || !matchesKey(data, Key.space)) return;
+		if (!enabled || !isKittyProtocolActive() || !matchesKey(data, Key.space)) return;
 
 		if (isKeyRelease(data)) {
 			const hold = spaceHold;
@@ -417,6 +472,10 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 		clearSpaceHold();
 		if (client?.state === "recording") {
 			stopRecording(ctx);
+			return;
+		}
+		if (startInFlight) {
+			ctx.ui.notify("Pi voice is already starting.", "warning");
 			return;
 		}
 		if (client && client.state !== "idle" && client.state !== "stopped") {
@@ -494,6 +553,7 @@ export default function piVoiceExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		voiceGeneration++;
 		enabled = false;
 		recordingEditorText = undefined;
 		clearSpaceHold();

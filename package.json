@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Local push-to-talk dictation for the Pi coding agent",
   "license": "Apache-2.0",
+  "type": "module",
   "keywords": [
     "pi-package",
     "speech-to-text",
@@ -14,9 +15,20 @@
     "type": "git",
     "url": "git+https://github.com/JairajSustained/pi-voice.git"
   },
+  "scripts": {
+    "test": "tsx --test tests-extension/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.85.1",
+    "@earendil-works/pi-tui": ">=0.85.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/node": "22.20.2",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
   },
   "pi": {
     "extensions": [
