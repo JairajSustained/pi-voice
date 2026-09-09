@@ -105,13 +105,15 @@ class AudioRecorder:
         timer = Timer(self._maximum_seconds, self._stop_at_limit)
         timer.daemon = True
         with self._lock:
-            if self._recording and self._stream is stream:
+            should_start_timer = self._recording and self._stream is stream
+            if should_start_timer:
                 self._limit_timer = timer
-        try:
-            timer.start()
-        except Exception:
-            self.cancel()
-            raise
+        if should_start_timer:
+            try:
+                timer.start()
+            except Exception:
+                self.cancel()
+                raise
 
     def _capture(self, input_data: Any, _frames: int, _time_info: Any, status: Any) -> None:
         if status:
