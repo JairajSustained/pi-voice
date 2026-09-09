@@ -1,0 +1,27 @@
+{
+  "name": "pi-voice",
+  "version": "0.1.0",
+  "description": "Local push-to-talk dictation for the Pi coding agent",
+  "license": "Apache-2.0",
+  "keywords": [
+    "pi-package",
+    "speech-to-text",
+    "dictation",
+    "parakeet",
+    "mlx"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JairajSustained/pi-voice.git"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "private": true
+}
