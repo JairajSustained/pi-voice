@@ -8,7 +8,11 @@ https://github.com/huggingface/speech-to-speech
 The upstream project is licensed under the Apache License, Version 2.0.
 See LICENSE for the complete license text.
 
-This project downloads and uses the NVIDIA Parakeet TDT 0.6B v3 model through
-its MLX conversion. Model weights are not distributed with this repository.
-The model is governed by the Creative Commons Attribution 4.0 license:
-https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+This project uses NVIDIA's Parakeet TDT 0.6B v3 model through an MLX format
+conversion maintained by mlx-community. The conversion was made from NVIDIA's
+original model. Pi Voice pins conversion commit
+ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15 and does not redistribute weights.
+
+Original model: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+MLX conversion: https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3/tree/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15
+Model license: https://creativecommons.org/licenses/by/4.0/

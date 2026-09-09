@@ -8,7 +8,7 @@ import logging
 import sys
 from collections.abc import Iterator
 from threading import Lock
-from typing import Any, TextIO
+from typing import Any, BinaryIO, TextIO
 
 from pi_voice.protocol import MAX_LINE_BYTES, ProtocolError, error_response, parse_request
 from pi_voice.runtime import LocalSpeechRuntime
@@ -17,45 +17,47 @@ from pi_voice.service import VoiceRuntime, VoiceService
 logger = logging.getLogger(__name__)
 
 
-def iter_bounded_lines(stdin: TextIO) -> Iterator[str | ProtocolError]:
-    """Read newline-delimited input without buffering an unbounded line."""
+def iter_bounded_lines(stdin: BinaryIO) -> Iterator[str | ProtocolError]:
+    """Read and strictly decode newline-delimited input without buffering an unbounded line."""
 
-    characters: list[str] = []
-    byte_count = 0
+    line = bytearray()
     discarding = False
     while chunk := stdin.readline(4_096):
-        for character in chunk:
-            if character == "\n":
+        for byte in chunk:
+            if byte == 0x0A:
                 if discarding:
                     yield ProtocolError("REQUEST_TOO_LARGE", f"Request exceeds {MAX_LINE_BYTES} bytes")
-                elif characters:
-                    yield "".join(characters)
-                characters = []
-                byte_count = 0
+                elif line:
+                    try:
+                        yield line.decode("utf-8")
+                    except UnicodeDecodeError:
+                        yield ProtocolError("INVALID_JSON", "Request must be valid UTF-8 JSON")
+                line.clear()
                 discarding = False
                 continue
             if discarding:
                 continue
-            byte_count += len(character.encode("utf-8"))
-            if byte_count > MAX_LINE_BYTES:
-                characters = []
+            line.append(byte)
+            if len(line) > MAX_LINE_BYTES:
+                line.clear()
                 discarding = True
-                continue
-            characters.append(character)
 
     if discarding:
         yield ProtocolError("REQUEST_TOO_LARGE", f"Request exceeds {MAX_LINE_BYTES} bytes")
-    elif characters:
-        yield "".join(characters)
+    elif line:
+        try:
+            yield line.decode("utf-8")
+        except UnicodeDecodeError:
+            yield ProtocolError("INVALID_JSON", "Request must be valid UTF-8 JSON")
 
 
-def run_sidecar(stdin: TextIO, stdout: TextIO, runtime: VoiceRuntime) -> None:
+def run_sidecar(stdin: BinaryIO, stdout: TextIO, runtime: VoiceRuntime) -> None:
     """Serve sidecar requests until shutdown or input EOF."""
 
     output_lock = Lock()
 
     def emit(message: dict[str, Any]) -> None:
-        encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        encoded = json.dumps(message, ensure_ascii=True, separators=(",", ":"))
         with output_lock:
             stdout.write(encoded + "\n")
             stdout.flush()
@@ -88,7 +90,7 @@ def main() -> None:
     sys.stdout = sys.stderr
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
     try:
-        run_sidecar(sys.stdin, protocol_output, LocalSpeechRuntime())
+        run_sidecar(sys.stdin.buffer, protocol_output, LocalSpeechRuntime())
     except KeyboardInterrupt:
         logger.info("Pi voice sidecar interrupted")
 

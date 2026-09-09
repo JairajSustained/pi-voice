@@ -41,12 +41,11 @@ class VoiceRequest:
 def parse_request(line: str) -> VoiceRequest:
     """Parse and validate one sidecar request line."""
 
-    if len(line.encode("utf-8")) > MAX_LINE_BYTES:
-        raise ProtocolError("REQUEST_TOO_LARGE", f"Request exceeds {MAX_LINE_BYTES} bytes")
-
     try:
+        if len(line.encode("utf-8")) > MAX_LINE_BYTES:
+            raise ProtocolError("REQUEST_TOO_LARGE", f"Request exceeds {MAX_LINE_BYTES} bytes")
         payload = json.loads(line)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, RecursionError, UnicodeDecodeError, UnicodeEncodeError) as exc:
         raise ProtocolError("INVALID_JSON", "Request must be valid JSON") from exc
 
     if not isinstance(payload, dict):

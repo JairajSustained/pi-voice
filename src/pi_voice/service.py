@@ -117,7 +117,15 @@ class VoiceService:
             name="pi-voice-transcribing",
             daemon=True,
         )
-        worker.start()
+        try:
+            worker.start()
+        except Exception:
+            with self._lock:
+                if token == self._active_token and request_id == self._active_request_id:
+                    self._active_request_id = None
+                    self._state = "idle"
+            self._emit(status_notification("idle"))
+            raise
 
     def _run_operation(
         self,
@@ -134,13 +142,16 @@ class VoiceService:
         except Exception as exc:
             response = error_response(request_id, self._runtime_error(exc))
 
+        # Keep terminal delivery ordered with cancel/shutdown. Once this lock is
+        # released, either the operation response was delivered or its token was
+        # invalidated; a later cancel cannot complete ahead of a stale result.
         with self._lock:
             if token != self._active_token or request_id != self._active_request_id:
                 return
             self._active_request_id = None
             self._state = "idle"
-        self._emit(status_notification("idle"))
-        self._emit(response)
+            self._emit(status_notification("idle"))
+            self._emit(response)
 
     def _cancel(self, request: VoiceRequest) -> None:
         with self._lock:

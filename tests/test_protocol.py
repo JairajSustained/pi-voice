@@ -47,6 +47,13 @@ def test_parse_request_rejects_an_oversized_line() -> None:
     assert raised.value.code == "REQUEST_TOO_LARGE"
 
 
+def test_parse_request_rejects_excessive_json_nesting() -> None:
+    with pytest.raises(ProtocolError) as raised:
+        parse_request("[" * 2_000 + "]" * 2_000)
+
+    assert raised.value.code == "INVALID_JSON"
+
+
 def test_parse_request_preserves_a_valid_id_on_later_validation_errors() -> None:
     with pytest.raises(ProtocolError) as raised:
         parse_request('{"id":"request-17","method":"missing","params":{}}')

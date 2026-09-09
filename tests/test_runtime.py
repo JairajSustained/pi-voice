@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import sys
-from threading import Event
+from collections.abc import Callable
+from threading import Event, Thread
+from time import sleep
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
@@ -171,6 +173,59 @@ def test_runtime_cancel_discards_the_recording() -> None:
     runtime.cancel()
 
     assert cancelled.is_set()
+
+
+def test_queued_transcription_cannot_start_after_shutdown() -> None:
+    first_started = Event()
+    release_first = Event()
+    transcribe_calls = 0
+
+    class BlockingTranscriber(FakeTranscriber):
+        def transcribe(self, audio: np.ndarray) -> TranscriptionResult:
+            nonlocal transcribe_calls
+            transcribe_calls += 1
+            first_started.set()
+            release_first.wait(timeout=2)
+            return super().transcribe(audio)
+
+    runtime = LocalSpeechRuntime(
+        recorder=SimpleNamespace(start=lambda: None, stop=lambda: object(), cancel=lambda: None),
+        transcriber_factory=BlockingTranscriber,
+    )
+    second_errors: list[Exception] = []
+    first = Thread(target=lambda: runtime.transcribe(np.ones(16, dtype=np.float32)))
+    second = Thread(
+        target=lambda: _capture_error(
+            lambda: runtime.transcribe(np.ones(16, dtype=np.float32)),
+            second_errors,
+        )
+    )
+
+    first.start()
+    assert first_started.wait(timeout=1)
+    second.start()
+    shutdown = Thread(target=runtime.shutdown)
+    shutdown.start()
+    for _ in range(20):
+        if runtime._shutdown:
+            break
+        sleep(0.01)
+    assert runtime._shutdown is True
+    release_first.set()
+
+    first.join(timeout=1)
+    second.join(timeout=1)
+    shutdown.join(timeout=1)
+    assert transcribe_calls == 1
+    assert len(second_errors) == 1
+    assert str(second_errors[0]) == "Voice runtime is shut down"
+
+
+def _capture_error(operation: Callable[[], object], errors: list[Exception]) -> None:
+    try:
+        operation()
+    except Exception as exc:
+        errors.append(exc)
 
 
 def test_runtime_shutdown_cleans_the_loaded_transcriber() -> None:

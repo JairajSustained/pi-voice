@@ -7,9 +7,9 @@ name = "pi-voice"
 version = "0.1.0"
 description = "Local push-to-talk dictation for the Pi coding agent"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Jairaj Sahgal" },
 ]

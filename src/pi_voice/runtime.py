@@ -107,7 +107,11 @@ class AudioRecorder:
         with self._lock:
             if self._recording and self._stream is stream:
                 self._limit_timer = timer
-                timer.start()
+        try:
+            timer.start()
+        except Exception:
+            self.cancel()
+            raise
 
     def _capture(self, input_data: Any, _frames: int, _time_info: Any, status: Any) -> None:
         if status:
@@ -171,6 +175,8 @@ class AudioRecorder:
             stream = self._stream
             self._stream = None
             self._limit_timer = None
+            self._chunks = []
+            self._sample_count = 0
             self._limit_reached = True
         try:
             self._close_stream(stream, abort=True)
@@ -263,6 +269,7 @@ class LocalSpeechRuntime:
             raise RuntimeError("Recording did not contain mono audio")
 
         with self._operation_lock:
+            self._ensure_running()
             return self._get_transcriber().transcribe(waveform)
 
     def cancel(self) -> None:

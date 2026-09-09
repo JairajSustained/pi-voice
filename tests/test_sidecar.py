@@ -35,14 +35,14 @@ def parse_lines(output: io.StringIO) -> list[dict[str, Any]]:
 
 
 def test_sidecar_serves_requests_until_shutdown() -> None:
-    stdin = io.StringIO(
+    stdin = io.BytesIO(
         '\n'.join(
             [
                 '{"id":"1","method":"ping","params":{}}',
                 '{"id":"2","method":"shutdown","params":{}}',
                 '{"id":"3","method":"ping","params":{}}',
             ]
-        )
+        ).encode()
     )
     stdout = io.StringIO()
     runtime = NoopRuntime()
@@ -57,14 +57,14 @@ def test_sidecar_serves_requests_until_shutdown() -> None:
 
 
 def test_sidecar_returns_protocol_errors_without_exiting() -> None:
-    stdin = io.StringIO(
+    stdin = io.BytesIO(
         '\n'.join(
             [
                 "not-json",
                 '{"id":"2","method":"ping","params":{}}',
                 '{"id":"3","method":"shutdown","params":{}}',
             ]
-        )
+        ).encode()
     )
     stdout = io.StringIO()
 
@@ -76,13 +76,13 @@ def test_sidecar_returns_protocol_errors_without_exiting() -> None:
 
 
 def test_sidecar_correlates_validation_errors_after_a_valid_id() -> None:
-    stdin = io.StringIO(
+    stdin = io.BytesIO(
         '\n'.join(
             [
                 '{"id":"17","method":"unknown","params":{}}',
                 '{"id":"18","method":"shutdown","params":{}}',
             ]
-        )
+        ).encode()
     )
     stdout = io.StringIO()
 
@@ -96,10 +96,12 @@ def test_sidecar_correlates_validation_errors_after_a_valid_id() -> None:
 
 
 def test_sidecar_discards_an_oversized_line_and_continues() -> None:
-    stdin = io.StringIO(
-        "x" * (MAX_LINE_BYTES + 1)
-        + '\n{"id":"2","method":"ping","params":{}}'
-        + '\n{"id":"3","method":"shutdown","params":{}}\n'
+    stdin = io.BytesIO(
+        (
+            "x" * (MAX_LINE_BYTES + 1)
+            + '\n{"id":"2","method":"ping","params":{}}'
+            + '\n{"id":"3","method":"shutdown","params":{}}\n'
+        ).encode()
     )
     stdout = io.StringIO()
 
@@ -107,4 +109,18 @@ def test_sidecar_discards_an_oversized_line_and_continues() -> None:
 
     messages = parse_lines(stdout)
     assert messages[0]["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert any(message.get("id") == "2" and message["ok"] is True for message in messages)
+
+
+def test_sidecar_rejects_invalid_utf8_and_continues() -> None:
+    stdin = io.BytesIO(
+        b'\xff\n{"id":"2","method":"ping","params":{}}\n'
+        b'{"id":"3","method":"shutdown","params":{}}\n'
+    )
+    stdout = io.StringIO()
+
+    run_sidecar(stdin, stdout, NoopRuntime())
+
+    messages = parse_lines(stdout)
+    assert messages[0]["error"]["code"] == "INVALID_JSON"
     assert any(message.get("id") == "2" and message["ok"] is True for message in messages)

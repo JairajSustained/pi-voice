@@ -1,7 +1,8 @@
 # Modified from Hugging Face speech-to-speech; see NOTICE.
 from __future__ import annotations
 
-from threading import Event, Lock
+from threading import Event, Lock, Thread
+from time import sleep
 from typing import Any
 
 from pi_voice.protocol import VoiceRequest
@@ -104,6 +105,36 @@ def test_service_rejects_a_new_operation_while_transcribing() -> None:
     assert response["error"]["code"] == "INVALID_STATE"
     runtime.release_transcription.set()
     assert collector.wait_for_id("2")["ok"] is True
+
+
+def test_cancel_cannot_complete_ahead_of_operation_delivery() -> None:
+    runtime = FakeRuntime()
+    delivery_started = Event()
+    release_delivery = Event()
+
+    class BlockingCollector(MessageCollector):
+        def emit(self, message: dict[str, Any]) -> None:
+            if message == {"event": "status", "data": {"state": "idle"}}:
+                delivery_started.set()
+                release_delivery.wait(timeout=2)
+            super().emit(message)
+
+    collector = BlockingCollector()
+    service = VoiceService(runtime, collector.emit)
+    service.handle(request("1", "record.start"))
+    service.handle(request("2", "record.stop"))
+    assert delivery_started.wait(timeout=1)
+
+    cancel_thread = Thread(target=lambda: service.handle(request("3", "cancel")))
+    cancel_thread.start()
+    sleep(0.05)
+    with collector.lock:
+        assert all(message.get("id") != "3" for message in collector.messages)
+
+    release_delivery.set()
+    cancel_thread.join(timeout=1)
+    response_ids = [message.get("id") for message in collector.messages if "id" in message]
+    assert response_ids.index("2") < response_ids.index("3")
 
 
 def test_cancel_terminates_the_active_request_exactly_once() -> None:
