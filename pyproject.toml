@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pi-voice"
+version = "0.1.0"
+description = "Local push-to-talk dictation for the Pi coding agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Jairaj Sahgal" },
+]
+keywords = ["pi", "dictation", "speech-to-text", "parakeet", "mlx"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "mlx==0.32.0; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "mlx-audio==0.4.7; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "numpy>=1.26,<2.4.4",
+    "sounddevice==0.5.3",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15",
+    "pytest>=8.3",
+    "ruff>=0.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pi_voice"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["pi_voice"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["mlx.*", "mlx_audio.*", "sounddevice"]
+ignore_missing_imports = true
