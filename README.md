@@ -10,11 +10,11 @@ Pi Voice is an experimental, macOS-first Pi package. Audio and transcription sta
 
 ## Requirements
 
-- Apple Silicon Mac
-- Python 3.11 or newer
+- Apple Silicon Mac running macOS 14 or newer
+- Python 3.11–3.14
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- [Pi](https://github.com/earendil-works/pi)
-- A terminal with enhanced Kitty keyboard events, such as iTerm2, for hold-Space input
+- [Pi](https://github.com/earendil-works/pi) 0.85.1 or newer
+- A terminal with enhanced Kitty keyboard events, such as iTerm2 (tested with 3.6.11), for hold-Space input
 - Enough disk space and unified memory for the 600M-parameter speech model
 
 ## Install
@@ -22,7 +22,7 @@ Pi Voice is an experimental, macOS-first Pi package. Audio and transcription sta
 Install directly from GitHub:
 
 ```bash
-pi install git:github.com/JairajSustained/pi-voice
+pi install git:github.com/JairajSustained/pi-voice@v0.1.0
 ```
 
 Restart Pi or run:
@@ -37,7 +37,7 @@ Then enable dictation:
 /voice
 ```
 
-On first use, `uv` creates an isolated Python environment inside Pi's package checkout. The Parakeet model loads lazily on the first transcription and may need to download model files, so that transcription can take much longer than later ones.
+On first use, `uv` creates an isolated Python environment inside Pi's package checkout. Every launch checks that environment against the committed lockfile, so `pi update` cannot leave stale dependencies behind. The Parakeet model loads lazily on the first transcription and may need to download model files, so that transcription can take much longer than later ones.
 
 ## Use
 
@@ -112,7 +112,7 @@ Clone the repository and run the protocol smoke test directly:
 ```bash
 git clone https://github.com/JairajSustained/pi-voice.git
 cd pi-voice
-uv sync --python 3.11
+uv sync --locked --python 3.11
 printf '%s\n%s\n' \
   '{"id":"1","method":"ping","params":{}}' \
   '{"id":"2","method":"shutdown","params":{}}' \
@@ -128,7 +128,7 @@ The first transcription downloads, loads, and initializes the model. Later trans
 ```bash
 git clone https://github.com/JairajSustained/pi-voice.git
 cd pi-voice
-uv sync --python 3.11
+uv sync --locked --python 3.11
 uv run pytest
 uv run ruff check src tests
 uv run mypy
