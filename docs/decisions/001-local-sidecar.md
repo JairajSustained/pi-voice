@@ -27,6 +27,56 @@ The sidecar loads the model lazily and serializes inference. Recording is capped
 
 Recognized text is inserted into Pi's editor only when the editor still matches the snapshot taken at recording start. The user must explicitly submit it.
 
+## Dictation sequence
+
+This sequence starts with voice enabled and Pi idle. The extension starts and checks the persistent sidecar when voice is enabled; model loading waits until transcription is needed.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Ext as Pi TypeScript extension
+    participant Editor as Pi editor
+    participant Sidecar as Python sidecar / VoiceService
+    participant Runtime as LocalSpeechRuntime
+    participant Model as Parakeet via MLX Audio
+    participant Pi as Pi coding agent
+
+    User->>Ext: Hold Space past recording threshold
+    Ext->>Editor: Read draft snapshot
+    Editor-->>Ext: Current draft
+    Ext->>Sidecar: record.start (NDJSON over stdin)
+    Sidecar->>Runtime: Start microphone capture
+    Sidecar-->>Ext: Recording status and acknowledgement
+    Note over Runtime: Buffer 16 kHz mono PCM in memory; cap at 60 seconds
+    User->>Ext: Release Space
+    Ext->>Sidecar: record.stop
+    Sidecar->>Runtime: Stop capture and collect audio
+    Runtime-->>Sidecar: Audio waveform
+    Sidecar-->>Ext: Transcribing status
+    Note over Sidecar: Run transcription on a worker; keep request handling responsive
+    Sidecar->>Runtime: Transcribe audio
+    Runtime->>Model: Load lazily if needed; decode audio
+    Note over Runtime,Model: Inference is serialized; loaded model is reused
+    Model-->>Runtime: Recognized text
+    Runtime-->>Sidecar: Transcription result
+    alt Operation is still active
+        Sidecar-->>Ext: Idle status and transcript response over stdout
+        Ext->>Editor: Compare current draft with snapshot
+        alt Draft is unchanged
+            Ext->>Editor: Append transcript with spacing
+            User->>Editor: Review and optionally edit
+            User->>Pi: Press Enter to submit editor text
+            Note over Pi: Normal model, tools and permission flow
+        else Draft changed
+            Ext-->>User: Notify; do not insert transcript
+        end
+    else Operation was cancelled or shut down
+        Note over Sidecar: Invalidated operation token suppresses late result
+    end
+```
+
+Cancellation invalidates the active operation and clears recording resources; an in-flight model call may finish internally, but its late result is discarded. A request timeout terminates the sidecar, allowing a later request to start a fresh process. Empty, too-short, and duration-limited recordings fail without inserting text. Protocol validation and the editor snapshot check protect the boundary before user submission.
+
 ## Alternatives considered
 
 ### Run speech recognition inside the TypeScript extension

@@ -144,6 +144,26 @@ See [ADR-001](docs/decisions/001-local-sidecar.md) for the architecture and trus
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    User["User: hold Space and speak"] --> Extension["Pi TypeScript extension<br/>Keyboard, state and child-process lifecycle"]
+    subgraph Local["Local speech processing on Apple Silicon"]
+        Sidecar["Python sidecar + VoiceService<br/>Validated requests and cancellable state machine"]
+        Mic["Microphone"] --> Runtime["LocalSpeechRuntime<br/>16 kHz mono audio in memory"]
+        Sidecar -->|Capture and transcribe| Runtime
+        Runtime --> Model["Parakeet TDT 0.6B v3<br/>Local inference via MLX Audio"]
+        Model -->|Recognized text| Sidecar
+    end
+    Extension -->|Bounded NDJSON requests over stdin| Sidecar
+    Sidecar -->|Status and transcript over stdout| Extension
+    Extension -->|Append only if editor is unchanged| Editor["Pi editor: user reviews and edits"]
+    Editor -->|User explicitly presses Enter| Pi["Pi coding agent<br/>Normal model, tools and permission flow"]
+```
+
+Pi Voice adds local speech recognition to Pi; Pi remains the only agent. The model is loaded on the first transcription and reused by the persistent sidecar. Audio stays in the speech runtime, while recognized text crosses the process boundary for review. After submission, Pi handles the text through its configured model and normal tool flow.
+
+See the [dictation sequence and failure handling](docs/decisions/001-local-sidecar.md#dictation-sequence) for the request lifecycle, cancellation, and editor protection.
+
 - `extensions/pi-voice.ts` integrates keyboard events, editor insertion, visual state, and lifecycle management with Pi.
 - `src/pi_voice/sidecar.py` exposes a bounded NDJSON protocol over child-process stdin/stdout.
 - `src/pi_voice/service.py` owns the cancellable recording/transcription state machine.
