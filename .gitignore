@@ -12,3 +12,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# /brag output: keep only the rendered demo video
+brag-output/*
+!brag-output/brag.mp4
