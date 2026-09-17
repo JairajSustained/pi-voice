@@ -6,6 +6,8 @@ Local push-to-talk dictation for the [Pi coding agent](https://github.com/earend
 microphone → Parakeet TDT → Pi editor → your review → normal Pi submission
 ```
 
+[![Pi Voice demo: hold Space, speak, release, review, Enter](brag-output/brag.jpg)](brag-output/brag.mp4)
+
 [Watch the 22-second demo](brag-output/brag.mp4): hold Space, speak, release, review, Enter.
 
 Pi Voice is an experimental, macOS-first Pi package. Audio and transcription stay local, and assistant responses are displayed rather than spoken.
